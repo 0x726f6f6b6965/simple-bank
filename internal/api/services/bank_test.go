@@ -39,6 +39,37 @@ func TestGetNonce(t *testing.T) {
 		},
 	}
 
+	service.users.Lock()
+	service.users.data["test"] = proto.User{
+		Account:  "test",
+		Balance:  100,
+		Password: "test-pwd",
+		Name:     "test-user",
+	}
+	service.users.Unlock()
+
+	nonce, err := service.GetNonce(ctx, "test", "test-pwd")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	service.users.RLock()
+	defer service.users.RUnlock()
+	if nonce != service.users.data["test"].Nonce {
+		t.Fatalf("Expected nonce: %v, got: %v", service.users.data["test"].Nonce, nonce)
+	}
+}
+
+func TestGetNonceWithError(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+	}
+
 	_, err := service.GetNonce(ctx, "", "")
 	if !errors.Is(err, ErrEmptyAccount) {
 		t.Fatalf("Expected error: %v, got: %v", ErrEmptyAccount, err)
@@ -62,20 +93,39 @@ func TestGetNonce(t *testing.T) {
 	if !errors.Is(err, ErrVerify) {
 		t.Fatalf("Expected error: %v, got: %v", ErrVerify, err)
 	}
-
-	nonce, err := service.GetNonce(ctx, "test", "test-pwd")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	service.users.RLock()
-	defer service.users.RUnlock()
-	if nonce != service.users.data["test"].Nonce {
-		t.Fatalf("Expected nonce: %v, got: %v", service.users.data["test"].Nonce, nonce)
-	}
 }
 
 func TestCreateAccount(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+	}
+	user := proto.User{
+		Account:  uuid.NewString(),
+		Name:     "test",
+		Balance:  100,
+		Password: "XXXXX",
+	}
+
+	info, err := service.CreateAccount(ctx, user)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if info.Nonce == "" {
+		t.Fatalf("Expected nonce: not empty, got: %v", info.Nonce)
+	}
+
+	_, err = service.CreateAccount(ctx, user)
+	if !errors.Is(err, ErrAccountExist) {
+		t.Fatalf("Expected error: %v, got: %v", ErrAccountExist, err)
+	}
+}
+
+func TestCreateAccountWithError(t *testing.T) {
 	service := &bank{
 		users: &userMap{
 			data: make(map[string]proto.User),
@@ -102,23 +152,48 @@ func TestCreateAccount(t *testing.T) {
 	if !errors.Is(err, ErrNegativeBalance) {
 		t.Fatalf("Expected error: %v, got: %v", ErrNegativeBalance, err)
 	}
-
-	user.Balance = 100
-	info, err := service.CreateAccount(ctx, user)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if info.Nonce == "" {
-		t.Fatalf("Expected nonce: not empty, got: %v", info.Nonce)
-	}
-
-	_, err = service.CreateAccount(ctx, user)
-	if !errors.Is(err, ErrAccountExist) {
-		t.Fatalf("Expected error: %v, got: %v", ErrAccountExist, err)
-	}
 }
 
 func TestDeposit(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+		count:  1,
+		search: NewSearch(),
+	}
+
+	tx := proto.Transaction{
+		To:     "test",
+		Amount: 10,
+	}
+
+	service.users.Lock()
+	service.users.data["test"] = proto.User{
+		Account:  "test",
+		Balance:  100,
+		Password: "test-pwd",
+		Name:     "test-user",
+		Nonce:    "test-nonce",
+	}
+	service.users.Unlock()
+
+	txLog, newNonce, err := service.Deposit(ctx, tx, "test-nonce")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if newNonce == "" || newNonce == "test-nonce" {
+		t.Fatalf("Expected nonce: not empty, got: %v", newNonce)
+	}
+	if txLog.ID == 0 {
+		t.Fatalf("Expected tx log: not empty, got: %v", txLog.ID)
+	}
+}
+
+func TestDepositWithError(t *testing.T) {
 	service := &bank{
 		users: &userMap{
 			data: make(map[string]proto.User),
@@ -172,8 +247,36 @@ func TestDeposit(t *testing.T) {
 	if !errors.Is(err, ErrVerify) {
 		t.Fatalf("Expected error: %v, got: %v", ErrVerify, err)
 	}
+}
 
-	txLog, newNonce, err := service.Deposit(ctx, tx, "test-nonce")
+func TestWithdraw(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+		count:  1,
+		search: NewSearch(),
+	}
+
+	tx := proto.Transaction{
+		From:   "test",
+		Amount: 10,
+	}
+
+	service.users.Lock()
+	service.users.data["test"] = proto.User{
+		Account:  "test",
+		Balance:  100,
+		Password: "test-pwd",
+		Name:     "test-user",
+		Nonce:    "test-nonce",
+	}
+	service.users.Unlock()
+
+	txLog, newNonce, err := service.Withdraw(ctx, tx, "test-nonce")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -185,7 +288,7 @@ func TestDeposit(t *testing.T) {
 	}
 }
 
-func TestWithdraw(t *testing.T) {
+func TestWithdrawWithError(t *testing.T) {
 	service := &bank{
 		users: &userMap{
 			data: make(map[string]proto.User),
@@ -244,10 +347,45 @@ func TestWithdraw(t *testing.T) {
 	if !errors.Is(err, ErrBalanceNotEnough) {
 		t.Fatalf("Expected error: %v, got: %v", ErrBalanceNotEnough, err)
 	}
+}
 
-	tx.Amount = 10
+func TestTransaction(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+		count:  1,
+		search: NewSearch(),
+	}
 
-	txLog, newNonce, err := service.Withdraw(ctx, tx, "test-nonce")
+	tx := proto.Transaction{
+		From:   "test",
+		To:     "test2",
+		Amount: 10,
+	}
+
+	service.users.Lock()
+	service.users.data["test"] = proto.User{
+		Account:  "test",
+		Balance:  100,
+		Password: "test-pwd",
+		Name:     "test-user",
+		Nonce:    "test-nonce",
+	}
+
+	service.users.data["test2"] = proto.User{
+		Account:  "test2",
+		Balance:  10,
+		Password: "test2-pwd",
+		Name:     "test2-user",
+		Nonce:    "test2-nonce",
+	}
+	service.users.Unlock()
+
+	txLog, newNonce, err := service.Transaction(ctx, tx, "test-nonce")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -259,7 +397,7 @@ func TestWithdraw(t *testing.T) {
 	}
 }
 
-func TestTransaction(t *testing.T) {
+func TestTransactionWithError(t *testing.T) {
 	service := &bank{
 		users: &userMap{
 			data: make(map[string]proto.User),
@@ -326,19 +464,6 @@ func TestTransaction(t *testing.T) {
 	if !errors.Is(err, ErrBalanceNotEnough) {
 		t.Fatalf("Expected error: %v, got: %v", ErrBalanceNotEnough, err)
 	}
-
-	tx.Amount = 10
-
-	txLog, newNonce, err := service.Transaction(ctx, tx, "test-nonce")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if newNonce == "" || newNonce == "test-nonce" {
-		t.Fatalf("Expected nonce: not empty, got: %v", newNonce)
-	}
-	if txLog.ID == 0 {
-		t.Fatalf("Expected tx log: not empty, got: %v", txLog.ID)
-	}
 }
 
 func TestGetBalance(t *testing.T) {
@@ -349,15 +474,6 @@ func TestGetBalance(t *testing.T) {
 		txs: &txMap{
 			data: make(map[uint64]proto.Transaction),
 		},
-	}
-
-	_, err := service.GetBalance(ctx, "")
-	if !errors.Is(err, ErrEmptyAccount) {
-		t.Fatalf("Expected error: %v, got: %v", ErrEmptyAccount, err)
-	}
-	_, err = service.GetBalance(ctx, "t")
-	if !errors.Is(err, ErrAccountNotExist) {
-		t.Fatalf("Expected error: %v, got: %v", ErrAccountNotExist, err)
 	}
 
 	service.users.Lock()
@@ -379,6 +495,26 @@ func TestGetBalance(t *testing.T) {
 	}
 }
 
+func TestGetBalanceWithError(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+	}
+
+	_, err := service.GetBalance(ctx, "")
+	if !errors.Is(err, ErrEmptyAccount) {
+		t.Fatalf("Expected error: %v, got: %v", ErrEmptyAccount, err)
+	}
+	_, err = service.GetBalance(ctx, "t")
+	if !errors.Is(err, ErrAccountNotExist) {
+		t.Fatalf("Expected error: %v, got: %v", ErrAccountNotExist, err)
+	}
+}
+
 func TestGetTransactions(t *testing.T) {
 	service := &bank{
 		users: &userMap{
@@ -389,15 +525,6 @@ func TestGetTransactions(t *testing.T) {
 		},
 		count:  1,
 		search: NewSearch(),
-	}
-
-	_, err := service.GetTransactions(ctx, "")
-	if !errors.Is(err, ErrEmptyAccount) {
-		t.Fatalf("Expected error: %v, got: %v", ErrEmptyAccount, err)
-	}
-	_, err = service.GetTransactions(ctx, "t")
-	if !errors.Is(err, ErrAccountNotExist) {
-		t.Fatalf("Expected error: %v, got: %v", ErrAccountNotExist, err)
 	}
 	pwd := uuid.NewString()
 
@@ -449,5 +576,27 @@ func TestGetTransactions(t *testing.T) {
 	}
 	if len(txs) != 3 {
 		t.Fatalf("Expected txs: 3, got: %v", len(txs))
+	}
+}
+
+func TestGetTransactionsWithError(t *testing.T) {
+	service := &bank{
+		users: &userMap{
+			data: make(map[string]proto.User),
+		},
+		txs: &txMap{
+			data: make(map[uint64]proto.Transaction),
+		},
+		count:  1,
+		search: NewSearch(),
+	}
+
+	_, err := service.GetTransactions(ctx, "")
+	if !errors.Is(err, ErrEmptyAccount) {
+		t.Fatalf("Expected error: %v, got: %v", ErrEmptyAccount, err)
+	}
+	_, err = service.GetTransactions(ctx, "t")
+	if !errors.Is(err, ErrAccountNotExist) {
+		t.Fatalf("Expected error: %v, got: %v", ErrAccountNotExist, err)
 	}
 }
